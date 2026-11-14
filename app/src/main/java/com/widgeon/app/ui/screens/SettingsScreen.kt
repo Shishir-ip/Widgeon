@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -255,6 +256,23 @@ fun SettingsScreen(appVm: AppViewModel, vm: SettingsViewModel = viewModel()) {
             subtitle = "Progress + completion while you're away",
             checked = notifEnabled,
         ) { appVm.setNotifEnabled(it) }
+
+        Spacer(Modifier.height(14.dp))
+        SectionLabel("WIDGET RENDERING")
+        val overlayClock by appVm.overlayClock.collectAsState()
+        ToggleCard(
+            icon = Icons.Rounded.Schedule,
+            title = "Live clock overlays",
+            subtitle = "Clock/date tick via the launcher itself (Android 12+). Turn OFF only if home-screen widgets show a loading error.",
+            checked = overlayClock,
+        ) { on ->
+            appVm.setOverlayClock(on)
+            scope.launch {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    com.widgeon.app.widgets.WidgetHost.updateAll(context)
+                }
+            }
+        }
 
         Spacer(Modifier.height(14.dp))
         SectionLabel("WEATHER")

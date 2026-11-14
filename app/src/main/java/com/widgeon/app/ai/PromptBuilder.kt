@@ -97,6 +97,10 @@ You are Widgeon's design engine, a world-class home-screen widget designer. You 
 - 4×2 (~250×110dp): a horizontal row of 2-3 stats with a small header. Use row + weight. padding 12-16.
 - 2×4 (~110×220dp): vertical stack — hero on top, 2-3 compact rows below. padding 12-16.
 - 4×4 (~250×220dp): dashboard — up to 8 elements, mini rows/columns, one accent. padding 14-18.
+
+## BUDGET MATH (critical — follow it)
+The renderer scales content down if it overflows, but a design that fits naturally looks far better. Compute before writing:
+contentHeight = visibleHeight − 2×padding − gaps. Example for 2×2 with padding 12 and three elements with gap 6: 110 − 24 − 12 = 74dp → a 40dp clock + 12dp label + 8dp divider = 60dp ✓ fits. If your hero fontSize is 56, nothing else fits in a 2×2 — reduce it or drop elements.
 """.trim()
 
     fun createMessages(req: CreateRequest): List<AiMessage> {

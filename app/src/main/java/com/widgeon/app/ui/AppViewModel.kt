@@ -21,9 +21,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _notifEnabled = MutableStateFlow(prefs.notifEnabled)
     val notifEnabled: StateFlow<Boolean> = _notifEnabled
 
+    private val _overlayClock = MutableStateFlow(prefs.overlayClock)
+    val overlayClock: StateFlow<Boolean> = _overlayClock
+
     fun setThemeMode(mode: String) {
         prefs.themeMode = mode
         _themeMode.value = mode
+    }
+
+    fun setOverlayClock(enabled: Boolean) {
+        prefs.overlayClock = enabled
+        _overlayClock.value = enabled
     }
 
     fun setHapticsEnabled(enabled: Boolean) {

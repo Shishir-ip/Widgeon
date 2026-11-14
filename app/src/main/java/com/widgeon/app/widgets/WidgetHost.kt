@@ -106,7 +106,9 @@ object WidgetHost {
     }
 
     fun buildDesignViews(context: Context, design: WidgetDesign, wDp: Int, hDp: Int): RemoteViews {
-        val useOverlay = Build.VERSION.SDK_INT >= 31
+        // Overlays use only officially-annotated RemoteViews actions. If the
+        // user toggles compatibility mode, everything is baked into the bitmap.
+        val useOverlay = Build.VERSION.SDK_INT >= 31 && context.widgeon.prefs.overlayClock
         val density = context.resources.displayMetrics.density.coerceIn(1f, 2.4f)
         val w = (wDp * density).roundToInt().coerceIn(8, 1600)
         val h = (hDp * density).roundToInt().coerceIn(8, 1600)
@@ -130,25 +132,18 @@ object WidgetHost {
         if (useOverlay) {
             result.overlays.forEachIndexed { i, spec ->
                 val id = LIVE_IDS[i]
-                try {
-                    views.setViewVisibility(id, View.VISIBLE)
-                    views.setCharSequence(id, "setFormat12Hour", spec.pattern)
-                    views.setCharSequence(id, "setFormat24Hour", spec.pattern)
-                    // TextView.setTextSize(float) is in sp — matches dp at default font scale
-                    views.setFloat(id, "setTextSize", spec.fontSizeDp)
-                    views.setInt(id, "setTextColor", spec.color)
-                    views.setBoolean(id, "setIncludeFontPadding", false)
-                    views.setInt(id, "setGravity", Gravity.CENTER_HORIZONTAL or Gravity.TOP)
-                    if (spec.style and Typeface.BOLD != 0) {
-                        views.setInt(id, "setPaintFlags", android.graphics.Paint.FAKE_BOLD_TEXT_FLAG)
-                    }
-                    views.setViewLayoutWidth(id, spec.widthDp, TypedValue.COMPLEX_UNIT_DIP)
-                    views.setViewLayoutMargin(id, RemoteViews.MARGIN_LEFT, spec.leftDp, TypedValue.COMPLEX_UNIT_DIP)
-                    views.setViewLayoutMargin(id, RemoteViews.MARGIN_TOP, spec.topDp, TypedValue.COMPLEX_UNIT_DIP)
-                } catch (t: Throwable) {
-                    // Overlay styling unsupported on this launcher: hide the slot
-                    views.setViewVisibility(id, View.GONE)
-                }
+                views.setViewVisibility(id, View.VISIBLE)
+                // TextClock format setters are explicitly @RemotableViewMethod
+                views.setCharSequence(id, "setFormat12Hour", spec.pattern)
+                views.setCharSequence(id, "setFormat24Hour", spec.pattern)
+                // Official API 31 styling methods (annotated, no reflection)
+                views.setTextViewTextSize(id, TypedValue.COMPLEX_UNIT_SP, spec.fontSizeDp)
+                views.setViewLayoutWidth(id, spec.widthDp, TypedValue.COMPLEX_UNIT_DIP)
+                views.setViewLayoutMargin(id, RemoteViews.MARGIN_LEFT, spec.leftDp, TypedValue.COMPLEX_UNIT_DIP)
+                views.setViewLayoutMargin(id, RemoteViews.MARGIN_TOP, spec.topDp, TypedValue.COMPLEX_UNIT_DIP)
+                // TextView.setTextColor / setGravity are @RemotableViewMethod
+                views.setInt(id, "setTextColor", spec.color)
+                views.setInt(id, "setGravity", Gravity.CENTER_HORIZONTAL or Gravity.TOP)
             }
         }
         return views

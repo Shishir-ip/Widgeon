@@ -86,12 +86,13 @@ object DesignRenderer {
         val innerH = (h - pad * 2).roundToInt().coerceAtLeast(4)
         val root = Element(type = ElementTypes.COLUMN, gap = 6, elements = design.elements)
 
-        // Auto-fit: shrink type/gaps until the tree fits its box.
-        var ctx = Ctx(density, data, ink, 1f, includeLive, imageLoader, design.images)
-        for (scale in floatArrayOf(1f, 0.92f, 0.84f, 0.76f, 0.68f, 0.6f)) {
-            ctx = Ctx(density, data, ink, scale, includeLive, imageLoader, design.images)
-            if (fits(root, innerW.toFloat(), innerH.toFloat(), ctx)) break
-        }
+        // Pass 1 — measure how much the tree overflows its box at scale 1.
+        val probe = Ctx(density, data, ink, 1f, includeLive, imageLoader, design.images)
+        val rootFit = fitOf(root, innerW.toFloat(), innerH.toFloat(), probe, 0)
+
+        // Pass 2 — render at the scale that makes everything fit.
+        val scale = if (rootFit.factor > 1.02f) (1f / rootFit.factor).coerceIn(0.5f, 1f) else 1f
+        val ctx = Ctx(density, data, ink, scale, includeLive, imageLoader, design.images)
 
         drawBackground(canvas, design.background, w.toFloat(), h.toFloat(), ctx)
         drawElement(canvas, root, pad, pad, innerW.toFloat(), innerH.toFloat(), ctx)
@@ -114,7 +115,6 @@ object DesignRenderer {
 
     private fun Float.dp(ctx: Ctx) = this * ctx.d
     private fun Int.dp(ctx: Ctx) = this * ctx.d
-
     private fun Float.ts(ctx: Ctx) = this * ctx.d * ctx.scale  // text-scaled dp
     private fun Int.ts(ctx: Ctx) = this * ctx.d * ctx.scale
 
@@ -122,17 +122,69 @@ object DesignRenderer {
 
     // -------------------------------------------------------------- fitting
 
-    private fun fits(el: Element, availW: Float, availH: Float, ctx: Ctx): Boolean {
+    private class Fit(val factor: Float, val required: Float)
+
+    /**
+     * Recursively estimates how much a container's content overflows its box.
+     * [factor] > 1 means content needs (factor ×) the available space on the
+     * container's main axis; [required] is the estimated main-axis size.
+     */
+    private fun fitOf(el: Element, availW: Float, availH: Float, ctx: Ctx, depth: Int): Fit {
+        if (depth > 6) return Fit(1f, 0f)
+        val pad2 = el.padding.dp(ctx) * 2f
         val gap = el.gap.ts(ctx)
-        val children = el.elements
-        var total = gap * (children.size - 1).coerceAtLeast(0)
-        for (c in children) {
-            val s = measuredSize(c, availW, availH, ctx, inRow = false)
-            val isFlexible = c.type == ElementTypes.ROW || c.type == ElementTypes.COLUMN ||
-                c.type == ElementTypes.SPACER || c.weight > 0f
-            if (!isFlexible) total += s[1]
+        val innerW = ((el.width?.dp(ctx) ?: availW) - pad2).coerceAtLeast(4f)
+        val innerH = ((el.height?.dp(ctx) ?: availH) - pad2).coerceAtLeast(4f)
+        val kids = el.elements
+        if (kids.isEmpty()) return Fit(1f, 0f)
+
+        val isColumn = el.type == ElementTypes.COLUMN
+        var factor = 1f
+        var mainTotal = gap * (kids.size - 1).coerceAtLeast(0)
+        var crossMax = 0f
+
+        for (c in kids) {
+            if (c.weight > 0f) continue // flexible: absorbs leftover space
+            when {
+                c.type == ElementTypes.SPACER ->
+                    mainTotal += ((if (isColumn) c.height else c.width)?.dp(ctx) ?: 0f)
+
+                c.type == ElementTypes.ROW || c.type == ElementTypes.COLUMN -> {
+                    val f = fitOf(c, innerW, innerH, ctx, depth + 1)
+                    factor = max(factor, f.factor)
+                    if (isColumn) mainTotal += f.required else crossMax = max(crossMax, f.required)
+                }
+
+                else -> {
+                    val s = measuredSize(c, innerW, innerH, ctx, inRow = !isColumn)
+                    if (isColumn) {
+                        mainTotal += s[1]
+                    } else {
+                        mainTotal += naturalWidthOf(c, ctx)
+                        crossMax = max(crossMax, s[1])
+                    }
+                }
+            }
         }
-        return total <= availH + 1f
+
+        return if (isColumn) {
+            val f = mainTotal / innerH
+            Fit(max(factor, f), mainTotal + pad2)
+        } else {
+            val f = mainTotal / innerW
+            Fit(max(factor, f), crossMax + pad2)
+        }
+    }
+
+    /** Single-line natural width of a leaf element, for row overflow checks. */
+    private fun naturalWidthOf(el: Element, ctx: Ctx): Float = when {
+        el.width != null -> el.width.dp(ctx)
+        el.type == ElementTypes.SPACER || el.type == ElementTypes.DIVIDER -> 0f
+        el.type == ElementTypes.ICON -> (el.height?.toFloat() ?: el.fontSize * 1.7f).ts(ctx)
+        el.type == ElementTypes.IMAGE -> ((el.height ?: el.width ?: 80)).dp(ctx) * ctx.scale
+        el.type == ElementTypes.BUTTON ->
+            textPaint(el, ctx).measureText(el.text ?: "Button") + 28f.dp(ctx)
+        else -> textPaint(el, ctx).measureText(resolveText(el, ctx))
     }
 
     // ----------------------------------------------------------- background

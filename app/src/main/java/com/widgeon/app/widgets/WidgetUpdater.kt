@@ -34,18 +34,19 @@ object WidgetUpdater {
         val designs = prefs.allBindings().values.mapNotNull { id ->
             runCatching { kotlinx.coroutines.runBlocking { context.widgeon.designRepo.get(id) } }.getOrNull()
         }
-        val interval = requiredInterval(designs)
+        val interval = requiredInterval(context, designs)
         if (interval == null) cancel(context) else schedule(context, interval)
     }
 
     /** Returns the required refresh interval in ms, or null if none is needed. */
-    fun requiredInterval(designs: List<WidgetDesign>): Long? {
+    fun requiredInterval(context: Context, designs: List<WidgetDesign>): Long? {
         var needed: Long? = null
         fun take(ms: Long) { needed = minOf(needed ?: ms, ms) }
-        val belowTwelve = Build.VERSION.SDK_INT < 31
+        // Without TextClock overlays (or below Android 12) clock/date need minute bakes
+        val needsMinuteBakes = Build.VERSION.SDK_INT < 31 || !context.widgeon.prefs.overlayClock
         for (d in designs) {
             if (d.hasRotatingImages()) take(MINUTE_MS)
-            if (belowTwelve && hasSystemLive(d)) take(MINUTE_MS)
+            if (needsMinuteBakes && hasSystemLive(d)) take(MINUTE_MS)
             if (hasDataElements(d)) take(DATA_MS)
         }
         return needed

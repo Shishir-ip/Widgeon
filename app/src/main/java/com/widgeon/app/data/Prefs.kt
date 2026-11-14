@@ -73,6 +73,14 @@ class Prefs(context: Context) {
         get() = plain.getBoolean("notifications", true)
         set(v) = plain.edit().putBoolean("notifications", v).apply()
 
+    /**
+     * Render clock/date with launcher-side TextClock overlays (Android 12+).
+     * Disable for a fully bitmap-baked widget if a launcher misbehaves.
+     */
+    var overlayClock: Boolean
+        get() = plain.getBoolean("overlay_clock", true)
+        set(v) = plain.edit().putBoolean("overlay_clock", v).apply()
+
     var onboardingDone: Boolean
         get() = plain.getBoolean("onboarding_done", false)
         set(v) = plain.edit().putBoolean("onboarding_done", v).apply()

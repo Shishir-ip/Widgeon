@@ -101,7 +101,9 @@ object DesignJsonParser {
         val cols = d.cols.coerceIn(1, 5)
         val rows = d.rows.coerceIn(1, 5)
         val bg = sanitizeBg(d.background)
-        val elements = sanitizeElements(d.elements, depth = 0).take(60)
+        // Fonts can't be taller than ~60% of the widget's visible height
+        val maxFont = ((rows * 70 - 30) * 0.6f).coerceIn(26f, 96f)
+        val elements = sanitizeElements(d.elements, maxFont, depth = 0).take(60)
 
         return d.copy(
             id = d.id.ifBlank { DesignRepository.newId() },
@@ -143,7 +145,7 @@ object DesignJsonParser {
         )
     }
 
-    private fun sanitizeElements(list: List<Element>, depth: Int): List<Element> {
+    private fun sanitizeElements(list: List<Element>, maxFont: Float, depth: Int): List<Element> {
         if (depth > 6) return emptyList()
         val out = ArrayList<Element>(list.size)
         for (e in list) {
@@ -154,33 +156,33 @@ object DesignJsonParser {
                     e.copy(
                         type = type,
                         gap = e.gap.coerceIn(0, 48),
-                        elements = sanitizeElements(e.elements, depth + 1).take(24),
+                        elements = sanitizeElements(e.elements, maxFont, depth + 1).take(24),
                     )
                 )
-                ElementTypes.TEXT -> if (!e.text.isNullOrBlank()) out.add(sanitizeLeaf(e, type))
-                ElementTypes.BUTTON -> out.add(sanitizeLeaf(e, type).copy(action = sanitizeAction(e.action)))
-                ElementTypes.CLOCK -> out.add(sanitizeLeaf(e.copy(format = e.format ?: "HH:mm"), type))
-                ElementTypes.DATE -> out.add(sanitizeLeaf(e.copy(format = e.format ?: "EEE, MMM d"), type))
+                ElementTypes.TEXT -> if (!e.text.isNullOrBlank()) out.add(sanitizeLeaf(e, type, maxFont))
+                ElementTypes.BUTTON -> out.add(sanitizeLeaf(e, type, maxFont).copy(action = sanitizeAction(e.action)))
+                ElementTypes.CLOCK -> out.add(sanitizeLeaf(e.copy(format = e.format ?: "HH:mm"), type, maxFont))
+                ElementTypes.DATE -> out.add(sanitizeLeaf(e.copy(format = e.format ?: "EEE, MMM d"), type, maxFont))
                 ElementTypes.BATTERY -> out.add(
-                    sanitizeLeaf(e, type).copy(style = if (e.style == "bar") "bar" else "percent")
+                    sanitizeLeaf(e, type, maxFont).copy(style = if (e.style == "bar") "bar" else "percent")
                 )
                 ElementTypes.WEATHER -> out.add(
-                    sanitizeLeaf(e, type).copy(style = if (e.style == "condition") "condition" else "temp")
+                    sanitizeLeaf(e, type, maxFont).copy(style = if (e.style == "condition") "condition" else "temp")
                 )
                 ElementTypes.IMAGE -> out.add(
-                    sanitizeLeaf(e, type).copy(index = e.index.coerceIn(0, 9), rotate = e.rotate)
+                    sanitizeLeaf(e, type, maxFont).copy(index = e.index.coerceIn(0, 9), rotate = e.rotate)
                 )
-                else -> out.add(sanitizeLeaf(e, type))
+                else -> out.add(sanitizeLeaf(e, type, maxFont))
             }
         }
         return out
     }
 
-    private fun sanitizeLeaf(e: Element, type: String): Element = e.copy(
+    private fun sanitizeLeaf(e: Element, type: String, maxFont: Float): Element = e.copy(
         type = type,
         text = e.text?.take(600),
         emoji = e.emoji?.take(8),
-        fontSize = e.fontSize.coerceIn(6f, 120f),
+        fontSize = e.fontSize.coerceIn(6f, maxFont),
         color = if (ColorUtil.isValid(e.color)) e.color?.trim() else null,
         font = when (e.font) {
             "sans-serif-light", "sans-serif-medium", "sans-serif-black", "sans-serif-condensed", "serif", "monospace" -> e.font
