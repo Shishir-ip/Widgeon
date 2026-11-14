@@ -101,6 +101,7 @@ fun AppRoot(appVm: AppViewModel) {
             NavHost(
                 navController = navController,
                 startDestination = startRoute,
+                modifier = Modifier.weight(1f),
                 enterTransition = { fadeIn(tween(260)) + androidx.compose.animation.slideInHorizontally(tween(300)) { it / 22 } },
                 exitTransition = { fadeOut(tween(180)) },
                 popEnterTransition = { fadeIn(tween(260)) },

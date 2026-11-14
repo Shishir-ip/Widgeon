@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -18,6 +19,7 @@ import com.widgeon.app.data.WidgetDesign
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -27,12 +29,31 @@ data class LiveSnapshot(
     val battery: Int = 100,
     val weatherTemp: Double? = null,
     val weatherCode: Int? = null,
+    /** Global slideshow counter; rotating images use (rotation + index) % images.size. */
+    val rotation: Int = 0,
 )
 
 /**
+ * A clock/date element the LAUNCHER renders live via a TextClock overlay
+ * (Android 12+). Positions are in dp, relative to the widget root.
+ */
+data class LiveOverlay(
+    val leftDp: Float,
+    val topDp: Float,
+    val widthDp: Float,
+    val fontSizeDp: Float,
+    val color: Int,
+    val pattern: String,
+    val style: Int,
+)
+
+data class RenderResult(val bitmap: Bitmap, val overlays: List<LiveOverlay>)
+
+/**
  * Canvas layout engine: measures + draws the element tree of a [WidgetDesign]
- * into a bitmap. The exact same code path renders the in-app preview and the
- * real home-screen widget, guaranteeing WYSIWYG.
+ * into a bitmap. The same code path renders the in-app preview and the real
+ * home-screen widget, guaranteeing WYSIWYG. Content is auto-fitted: if the
+ * design overflows its box, type/gaps scale down until it fits.
  */
 object DesignRenderer {
 
@@ -42,32 +63,77 @@ object DesignRenderer {
         heightPx: Int,
         density: Float,
         data: LiveSnapshot,
-    ): Bitmap {
+        imageLoader: ((String) -> Bitmap?)? = null,
+    ): Bitmap = renderDetailed(design, widthPx, heightPx, density, data, includeLive = true, imageLoader = imageLoader).bitmap
+
+    fun renderDetailed(
+        design: WidgetDesign,
+        widthPx: Int,
+        heightPx: Int,
+        density: Float,
+        data: LiveSnapshot,
+        includeLive: Boolean,
+        imageLoader: ((String) -> Bitmap?)? = null,
+    ): RenderResult {
         val w = widthPx.coerceAtLeast(8)
         val h = heightPx.coerceAtLeast(8)
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         val ink = ColorUtil.inkFor(design.background.color, design.background.colorEnd)
-        val ctx = Ctx(density, data, ink)
-
-        drawBackground(canvas, design.background, w.toFloat(), h.toFloat(), ctx)
 
         val pad = design.padding * density
         val innerW = (w - pad * 2).roundToInt().coerceAtLeast(4)
         val innerH = (h - pad * 2).roundToInt().coerceAtLeast(4)
         val root = Element(type = ElementTypes.COLUMN, gap = 6, elements = design.elements)
+
+        // Auto-fit: shrink type/gaps until the tree fits its box.
+        var ctx = Ctx(density, data, ink, 1f, includeLive, imageLoader, design.images)
+        for (scale in floatArrayOf(1f, 0.92f, 0.84f, 0.76f, 0.68f, 0.6f)) {
+            ctx = Ctx(density, data, ink, scale, includeLive, imageLoader, design.images)
+            if (fits(root, innerW.toFloat(), innerH.toFloat(), ctx)) break
+        }
+
+        drawBackground(canvas, design.background, w.toFloat(), h.toFloat(), ctx)
         drawElement(canvas, root, pad, pad, innerW.toFloat(), innerH.toFloat(), ctx)
-        return bmp
+        return RenderResult(bmp, ctx.overlays)
     }
 
     // ------------------------------------------------------------------ ctx
 
-    private class Ctx(val d: Float, val data: LiveSnapshot, val ink: Int)
+    private class Ctx(
+        val d: Float,
+        val data: LiveSnapshot,
+        val ink: Int,
+        val scale: Float,
+        val includeLive: Boolean,
+        val imageLoader: ((String) -> Bitmap?)?,
+        val images: List<String>,
+    ) {
+        val overlays = ArrayList<LiveOverlay>(4)
+    }
 
     private fun Float.dp(ctx: Ctx) = this * ctx.d
     private fun Int.dp(ctx: Ctx) = this * ctx.d
 
-    private fun Element.isBatteryBar() = type == ElementTypes.BATTERY && style == "bar"
+    private fun Float.ts(ctx: Ctx) = this * ctx.d * ctx.scale  // text-scaled dp
+    private fun Int.ts(ctx: Ctx) = this * ctx.d * ctx.scale
+
+    private fun Element.isLiveText() = type == ElementTypes.CLOCK || type == ElementTypes.DATE
+
+    // -------------------------------------------------------------- fitting
+
+    private fun fits(el: Element, availW: Float, availH: Float, ctx: Ctx): Boolean {
+        val gap = el.gap.ts(ctx)
+        val children = el.elements
+        var total = gap * (children.size - 1).coerceAtLeast(0)
+        for (c in children) {
+            val s = measuredSize(c, availW, availH, ctx, inRow = false)
+            val isFlexible = c.type == ElementTypes.ROW || c.type == ElementTypes.COLUMN ||
+                c.type == ElementTypes.SPACER || c.weight > 0f
+            if (!isFlexible) total += s[1]
+        }
+        return total <= availH + 1f
+    }
 
     // ----------------------------------------------------------- background
 
@@ -97,7 +163,7 @@ object DesignRenderer {
         if (border != null && bg.borderWidth > 0) {
             val bp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
-                strokeWidth = bg.borderWidth.dp(ctx)
+                strokeWidth = max(1f, bg.borderWidth.dp(ctx))
                 color = border
             }
             val inset = bp.strokeWidth / 2f
@@ -109,9 +175,8 @@ object DesignRenderer {
 
     /** Returns [w, h] in px for the element given the available box. */
     private fun measuredSize(el: Element, availW: Float, availH: Float, ctx: Ctx, inRow: Boolean): FloatArray {
-        val d = ctx.d
-        val fixedW = el.width?.times(d)
-        val fixedH = el.height?.times(d)
+        val fixedW = el.width?.dp(ctx)
+        val fixedH = el.height?.dp(ctx)
         val pad2 = el.padding.dp(ctx) * 2f
 
         return when (el.type) {
@@ -126,7 +191,7 @@ object DesignRenderer {
                 floatArrayOf(w, min(layout.height.toFloat(), availH.coerceAtLeast(4f)) + pad2)
             }
 
-            ElementTypes.BATTERY -> if (el.isBatteryBar()) {
+            ElementTypes.BATTERY -> if (el.style == "bar") {
                 floatArrayOf(fixedW ?: availW, fixedH ?: 8f.dp(ctx))
             } else {
                 val paint = textPaint(el, ctx)
@@ -136,8 +201,14 @@ object DesignRenderer {
             }
 
             ElementTypes.ICON -> {
-                val s = fixedH ?: (el.fontSize * 1.7f).dp(ctx)
+                val s = fixedH ?: (el.fontSize * 1.7f).ts(ctx)
                 floatArrayOf(s, s)
+            }
+
+            ElementTypes.IMAGE -> {
+                val w = fixedW ?: availW
+                val h = fixedH ?: (if (el.height == null && el.width != null) el.width.dp(ctx) else availH)
+                floatArrayOf(w, h)
             }
 
             ElementTypes.DIVIDER -> floatArrayOf(fixedW ?: availW, el.thickness.coerceAtLeast(1).dp(ctx))
@@ -150,11 +221,11 @@ object DesignRenderer {
                 val paint = textPaint(el, ctx)
                 val textW = paint.measureText(el.text ?: "Button")
                 val w = fixedW ?: (if (inRow) textW + 28f.dp(ctx) else availW)
-                val h = fixedH ?: (el.fontSize * 2.3f).dp(ctx).coerceAtLeast(28f.dp(ctx))
+                val h = fixedH ?: (el.fontSize * 2.3f).ts(ctx).coerceAtLeast(28f.dp(ctx))
                 floatArrayOf(w, h)
             }
 
-            else -> floatArrayOf(fixedW ?: availW, fixedH ?: (el.fontSize * 1.4f).dp(ctx))
+            else -> floatArrayOf(fixedW ?: availW, fixedH ?: (el.fontSize * 1.4f).ts(ctx))
         }
     }
 
@@ -178,6 +249,7 @@ object DesignRenderer {
             ElementTypes.ROW -> drawRow(canvas, el, ix, iy, iw, ih, ctx)
             ElementTypes.COLUMN -> drawColumn(canvas, el, ix, iy, iw, ih, ctx)
             ElementTypes.ICON -> drawIcon(canvas, el, ix, iy, iw, ih, ctx)
+            ElementTypes.IMAGE -> drawImage(canvas, el, ix, iy, iw, ih, ctx)
             ElementTypes.DIVIDER -> {
                 val p = Paint().apply {
                     color = ColorUtil.parseOr(el.color, ctx.ink)
@@ -187,7 +259,7 @@ object DesignRenderer {
                 canvas.drawLine(ix, cy, ix + iw, cy, p)
             }
             ElementTypes.PROGRESS -> drawBar(canvas, ix, iy, iw, ih, el.value / 100f, el, ctx)
-            ElementTypes.BATTERY -> if (el.isBatteryBar()) {
+            ElementTypes.BATTERY -> if (el.style == "bar") {
                 drawBar(canvas, ix, iy, iw, ih, ctx.data.battery / 100f, el, ctx)
             } else {
                 drawTextLike(canvas, el, ix, iy, iw, ih, ctx)
@@ -199,6 +271,26 @@ object DesignRenderer {
     }
 
     private fun drawTextLike(canvas: Canvas, el: Element, x: Float, y: Float, w: Float, h: Float, ctx: Ctx) {
+        // Hand clock/date elements to the launcher's TextClock (live, no alarms)
+        if (el.isLiveText() && !ctx.includeLive && ctx.overlays.size < 4) {
+            ctx.overlays.add(
+                LiveOverlay(
+                    leftDp = x / ctx.d,
+                    topDp = y / ctx.d,
+                    widthDp = w / ctx.d,
+                    fontSizeDp = el.fontSize * ctx.scale,
+                    color = ColorUtil.parseOr(el.color, ctx.ink),
+                    pattern = el.format ?: if (el.type == ElementTypes.CLOCK) "HH:mm" else "EEE, MMM d",
+                    style = when {
+                        el.bold && el.italic -> Typeface.BOLD_ITALIC
+                        el.bold -> Typeface.BOLD
+                        el.italic -> Typeface.ITALIC
+                        else -> Typeface.NORMAL
+                    },
+                )
+            )
+            return
+        }
         val paint = textPaint(el, ctx)
         val layout = staticLayout(resolveText(el, ctx), paint, w.toInt().coerceAtLeast(4), el.maxLines)
         var dx = x
@@ -222,6 +314,53 @@ object DesignRenderer {
         canvas.drawText(emoji, x + w / 2f, cy, p)
     }
 
+    private fun drawImage(canvas: Canvas, el: Element, x: Float, y: Float, w: Float, h: Float, ctx: Ctx) {
+        val bmp = resolveImage(el, ctx)
+        val radius = el.cornerRadius.dp(ctx)
+        val rect = RectF(x, y, x + w, y + h)
+        if (bmp == null) {
+            // Neutral monochrome placeholder that still looks intentional
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ctx.ink and 0x00FFFFFF or 0x14FFFFFF }
+            canvas.drawRoundRect(rect, radius, radius, p)
+            val bp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 1f.dp(ctx)
+                color = ctx.ink and 0x00FFFFFF or 0x33FFFFFF
+            }
+            canvas.drawRoundRect(rect, radius, radius, bp)
+            val ip = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                textAlign = Paint.Align.CENTER
+                textSize = min(w, h) * 0.3f
+                color = ctx.ink and 0x00FFFFFF or 0x66FFFFFF
+            }
+            val cy = y + h / 2f - (ip.descent() + ip.ascent()) / 2f
+            canvas.drawText("🖼", x + w / 2f, cy, ip)
+            return
+        }
+        val save = canvas.save()
+        val clip = Path().apply { addRoundRect(rect, radius, radius, Path.Direction.CW) }
+        canvas.clipPath(clip)
+        // Center-crop: scale the source region into the destination box
+        val bw = bmp.width.toFloat()
+        val bh = bmp.height.toFloat()
+        val scale = max(w / bw, h / bh)
+        val sw = w / scale
+        val sh = h / scale
+        val sx = (bw - sw) / 2f
+        val sy = (bh - sh) / 2f
+        val p = Paint(Paint.FILTER_BITMAP_FLAG)
+        canvas.translate(x, y)
+        canvas.scale(w / sw, h / sh)
+        canvas.drawBitmap(bmp, -sx, -sy, p)
+        canvas.restoreToCount(save)
+    }
+
+    private fun resolveImage(el: Element, ctx: Ctx): Bitmap? {
+        if (ctx.images.isEmpty()) return null
+        val idx = if (el.rotate) (ctx.data.rotation + el.index).mod(ctx.images.size) else el.index % ctx.images.size
+        return ctx.imageLoader?.invoke(ctx.images[idx])
+    }
+
     private fun drawBar(canvas: Canvas, x: Float, y: Float, w: Float, h: Float, frac: Float, el: Element, ctx: Ctx) {
         val r = h / 2f
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -239,7 +378,7 @@ object DesignRenderer {
         canvas.drawRoundRect(RectF(x, y, x + w, y + h), r, r, p)
 
         val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = el.fontSize.dp(ctx)
+            textSize = el.fontSize.ts(ctx)
             typeface = typefaceFor(el)
             color = ColorUtil.parseOr(el.color, contrastFor(bg))
             textAlign = Paint.Align.CENTER
@@ -253,10 +392,9 @@ object DesignRenderer {
     private fun drawColumn(canvas: Canvas, el: Element, x: Float, y: Float, w: Float, h: Float, ctx: Ctx) {
         val children = el.elements
         if (children.isEmpty()) return
-        val gap = el.gap.dp(ctx)
+        val gap = el.gap.ts(ctx)
         val sizes = children.map { measuredSize(it, w, h, ctx, inRow = false).copyOf() }
 
-        // Weight distribution on the main (vertical) axis
         val fixedTotal = sizes.sumOf { it[1].toDouble() }.toFloat() + gap * (children.size - 1)
         val leftover = (h - fixedTotal).coerceAtLeast(0f)
         val weightSum = children.sumOf { it.weight.toDouble() }.toFloat()
@@ -282,10 +420,9 @@ object DesignRenderer {
     private fun drawRow(canvas: Canvas, el: Element, x: Float, y: Float, w: Float, h: Float, ctx: Ctx) {
         val children = el.elements
         if (children.isEmpty()) return
-        val gap = el.gap.dp(ctx)
+        val gap = el.gap.ts(ctx)
         val sizes = children.map { measuredSize(it, w, h, ctx, inRow = true).copyOf() }
 
-        // Unweighted children without a fixed width share the leftover width equally
         val usedByFixed = sizes.withIndex().sumOf { (i, s) ->
             val c = children[i]
             if (c.weight > 0f || c.width != null || c.type == ElementTypes.BUTTON) s[0].toDouble() else 0.0
@@ -296,7 +433,6 @@ object DesignRenderer {
         val share = if (flexibleIdx.isNotEmpty()) ((w - usedByFixed).coerceAtLeast(0f) / flexibleIdx.size) else 0f
         flexibleIdx.forEach { sizes[it][0] = share.coerceAtLeast(8f) }
 
-        // Weight distribution on the main (horizontal) axis
         val fixedTotal = sizes.sumOf { it[0].toDouble() }.toFloat() + gap * (children.size - 1)
         val leftover = (w - fixedTotal).coerceAtLeast(0f)
         val weightSum = children.sumOf { it.weight.toDouble() }.toFloat()
@@ -322,7 +458,7 @@ object DesignRenderer {
     // ------------------------------------------------------------- helpers
 
     private fun textPaint(el: Element, ctx: Ctx): TextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = el.fontSize.dp(ctx)
+        textSize = el.fontSize.ts(ctx)
         color = ColorUtil.parseOr(el.color, ctx.ink)
         typeface = typefaceFor(el)
         letterSpacing = el.spacing
@@ -343,7 +479,7 @@ object DesignRenderer {
         return StaticLayout.Builder
             .obtain(clamped, 0, clamped.length, paint, width.coerceAtLeast(4))
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, 1.06f)
+            .setLineSpacing(0f, 1.04f)
             .setMaxLines(maxLines)
             .setEllipsize(TextUtils.TruncateAt.END)
             .build()

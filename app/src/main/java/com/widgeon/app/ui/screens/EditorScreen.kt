@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -27,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddToHomeScreen
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Redo
@@ -112,7 +115,9 @@ class EditorViewModel(app: Application, val designId: String) : AndroidViewModel
     }
 
     fun push(design: WidgetDesign) {
-        history = history.take(index + 1) + design
+        val currentV = history.getOrNull(index)?.version ?: -1
+        val bumped = if (design.version == currentV) design.copy(version = design.version + 1) else design
+        history = history.take(index + 1) + bumped
         index = history.lastIndex
     }
 
@@ -129,7 +134,21 @@ class EditorViewModel(app: Application, val designId: String) : AndroidViewModel
             viewModelScope.launch {
                 getApplication<WidgeonApp>().designRepo.upsert(d)
                 savedTick++
+                withContext(Dispatchers.Default) {
+                    com.widgeon.app.widgets.WidgetHost.updateAll(getApplication())
+                }
             }
+        }
+    }
+
+    fun removeImage(name: String) {
+        current?.let { d -> push(d.copy(images = d.images - name)) }
+    }
+
+    fun addImages(names: List<String>) {
+        current?.let { d ->
+            push(d.copy(images = (d.images + names).distinct().take(12)))
+            persist()
         }
     }
 
@@ -173,8 +192,22 @@ fun EditorScreen(
     var previewBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     val design = vm.current
+    val hasImageSlots = remember(design?.elements, design?.images) {
+        design != null && (design.images.isNotEmpty() || hasImageElement(design))
+    }
 
-    // Re-render preview whenever the version changes
+    val pickPhotos = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(6)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            scope.launch {
+                val names = com.widgeon.app.data.ImageStore.saveAll(context, uris)
+                if (names.isNotEmpty()) vm.addImages(names)
+            }
+        }
+    }
+
+    // Re-render preview whenever the version changes + refresh bound home-screen widgets
     LaunchedEffect(design?.id, design?.version) {
         val d = design ?: return@LaunchedEffect
         withContext(Dispatchers.Default) {
@@ -183,6 +216,7 @@ fun EditorScreen(
                 (d.cols * 70 - 30).coerceAtLeast(48),
                 (d.rows * 70 - 30).coerceAtLeast(48),
             )
+            com.widgeon.app.widgets.WidgetHost.updateAll(context)
         }
     }
 
@@ -283,6 +317,46 @@ fun EditorScreen(
                 })
             }
 
+            // ------- Photos (for image elements)
+            if (hasImageSlots && design != null) {
+                Spacer(Modifier.height(18.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Photos",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.weight(1f),
+                    )
+                    GhostButton(
+                        if (design.images.isEmpty()) "Attach" else "Add more",
+                        onClick = {
+                            pickPhotos.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                    )
+                }
+                if (design.images.isEmpty()) {
+                    Text(
+                        "This design has photo slots. Attach pictures to fill them — rotating slots cycle through all photos on the home screen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    )
+                } else {
+                    androidx.compose.foundation.lazy.LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    ) {
+                        items(design.images, key = { it }) { name ->
+                            PhotoThumb(name = name, onRemove = { vm.removeImage(name) })
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.height(20.dp))
 
             // ------- Refine input
@@ -377,4 +451,43 @@ private fun previewHeight(design: WidgetDesign?) = when {
     design.rows >= 4 -> 320.dp
     design.cols >= 3 -> 220.dp
     else -> 240.dp
+}
+
+private fun hasImageElement(design: WidgetDesign): Boolean =
+    design.elements.any { it.type == "image" || it.elements.any { e -> e.type == "image" } }
+
+@Composable
+private fun PhotoThumb(name: String, onRemove: () -> Unit) {
+    val context = LocalContext.current
+    var bmp by remember(name) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(name) {
+        withContext(Dispatchers.IO) { bmp = com.widgeon.app.data.ImageStore.load(context, name) }
+    }
+    Box {
+        val b = bmp
+        if (b != null) {
+            Image(
+                bitmap = b.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)),
+            )
+        } else {
+            Box(
+                Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+        }
+        IconPill(
+            Icons.Rounded.Close, "Remove photo", onRemove,
+            modifier = Modifier
+                .size(22.dp)
+                .align(Alignment.TopEnd)
+                .offset(x = 6.dp, y = (-6).dp),
+            container = MaterialTheme.colorScheme.primary,
+            tint = MaterialTheme.colorScheme.onPrimary,
+        )
+    }
 }

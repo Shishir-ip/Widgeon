@@ -43,7 +43,7 @@ object PromptBuilder {
     )
 
     fun systemPrompt(): String = """
-You are Widgeon's design engine. You convert a user's description into a JSON spec for an Android home-screen widget. The widget is rendered from your JSON — nothing else. Respond with EXACTLY ONE JSON object and nothing else: no markdown fences, no explanations, no comments.
+You are Widgeon's design engine, a world-class home-screen widget designer. You convert a user's description into a JSON spec for an Android widget that Widgeon renders EXACTLY as specified. Respond with EXACTLY ONE JSON object and nothing else: no markdown fences, no explanations, no comments.
 
 ## Top-level schema
 {
@@ -72,6 +72,9 @@ You are Widgeon's design engine. You convert a user's description into a JSON sp
 - {"type":"battery","style":"percent"|"bar","fontSize":14} // live battery %; bar draws a progress bar
 - {"type":"weather","style":"temp"|"condition","fontSize":16} // live temperature ("21°") or condition emoji; only if user asked for weather
 - {"type":"icon","emoji":"⚡","fontSize":24}               // icons are EMOJI only
+- {"type":"image","index":0,"rotate":false,"width":90,"height":90,"cornerRadius":16}
+    // a photo slot the user attaches after generating. index = which attached photo (0,1,2…).
+    // rotate:true cycles through ALL attached photos on every refresh. Always give images explicit width+height.
 - {"type":"divider","thickness":1,"color":"#33FFFFFF"}     // horizontal line
 - {"type":"spacer","height":8}                             // invisible gap; can use weight to absorb space
 - {"type":"progress","value":72,"color":"#FFFFFFFF","trackColor":"#26FFFFFF","height":8,"cornerRadius":4}
@@ -80,13 +83,20 @@ You are Widgeon's design engine. You convert a user's description into a JSON sp
 - {"type":"column","gap":6,"elements":[...]}                   // vertical stack
 
 ## Hard rules
-1. LAYOUT: use "column" (top-level recommended) and "row" to compose. Add "weight":1 to exactly one child of a row/column to make it absorb the leftover space (great with spacer for vertical centering).
-2. COLOR: text colors must contrast with the background. Use "color":"auto" to inherit an automatically-contrasting ink color. Secondary text: same hue at ~60% alpha (e.g. "#99FFFFFF").
-3. SIZES are dp. Keep every element inside the widget's content area — never rely on clipping.
-4. LIVE DATA: clock/date/battery/weather ONLY when appropriate for the request. The rest is static text/icons.
-5. HIERARCHY: one clear hero element (big time or number), max two font families, 2-3 tints of the same color. It must look designed, not generated.
-6. NO images, NO network content, NO unknown element types, NO trailing commas, NO text outside the JSON.
-7. The JSON must be immediately parseable: valid UTF-8, escaped quotes inside strings, real numbers unquoted.
+1. OBEY THE REQUEST. Build exactly what the user describes — a photo widget gets "image" elements, a quote widget gets text, a timer label gets text. NEVER fall back to a clock unless the user asked for one. NEVER add clock/date/battery/weather elements unless they are requested or clearly essential to the concept.
+2. IMAGES: when the user asks for photos, place "image" elements matching the requested count (e.g. "2 or 3 pictures" → 3 slots, index 0..2). If they want them to change/rotate over time set "rotate":true on the slots. The user attaches the actual photos in the editor afterwards; until then a tasteful placeholder shows.
+3. LAYOUT: use "column" (recommended root) and "row" to compose. Add "weight":1 to exactly one child of a row/column to absorb leftover space (great for vertical centering with a spacer).
+4. COLOR: text colors must contrast with the background. Use "color":"auto" to inherit an automatically-contrasting ink. Secondary text: same hue at ~60% alpha (e.g. "#99FFFFFF").
+5. SIZES are dp and MUST fit the widget's content area (visible area minus 2×padding). Sizes are strictly enforced by the renderer — oversized text gets scaled down, so aim to fit naturally.
+6. HIERARCHY: one clear hero element, max two font families, 2-3 tints of the same color. It must look designed, not generated.
+7. NO unknown element types, NO trailing commas, NO text outside the JSON.
+
+## Composition by size (visible content area, approx)
+- 1×1 (~70×70dp): ONE hero element only — a huge time, number, or emoji. padding 8-10. Nothing else.
+- 2×2 (~110×110dp): hero + one small label/divider. Max 4 elements. padding 10-14.
+- 4×2 (~250×110dp): a horizontal row of 2-3 stats with a small header. Use row + weight. padding 12-16.
+- 2×4 (~110×220dp): vertical stack — hero on top, 2-3 compact rows below. padding 12-16.
+- 4×4 (~250×220dp): dashboard — up to 8 elements, mini rows/columns, one accent. padding 14-18.
 """.trim()
 
     fun createMessages(req: CreateRequest): List<AiMessage> {
@@ -101,15 +111,15 @@ You are Widgeon's design engine. You convert a user's description into a JSON sp
 
         val sb = StringBuilder()
         sb.append("Design an Android home-screen widget.\n\n")
-        sb.append("USER REQUEST: ").append(req.prompt.trim()).append('\n')
+        sb.append("USER REQUEST (obey it literally — this defines the widget's content):\n“").append(req.prompt.trim()).append("”\n")
         sb.append("\nGRID SIZE: ").append(req.cols).append('x').append(req.rows)
             .append(" (visible area approx ").append(approx.first).append('x').append(approx.second)
-            .append(" dp — plan font sizes and layout so everything fits comfortably).\n")
+            .append(" dp — follow the composition guide for this size).\n")
         sb.append("\nSTYLE: ").append(req.style).append(" — ").append(style).append('\n')
         if (req.accent.isNotBlank()) sb.append("\nACCENT COLOR: use ").append(req.accent).append(" as the only accent (background/text stay monochrome).\n")
         sb.append("\nCORNER RADIUS: ").append(req.cornerRadius).append("dp.\n")
         if (wants.isNotEmpty()) sb.append("\nMUST INCLUDE live data: ").append(wants.joinToString("; ")).append(".\n")
-        else sb.append("\nNO live-data elements needed — static content only.\n")
+        else sb.append("\nNO live-data elements unless the request clearly needs them — do not add a clock if the user didn't ask for one.\n")
         if (req.notes.isNotBlank()) sb.append("\nEXTRA USER NOTES: ").append(req.notes.trim()).append('\n')
         sb.append("\nReturn the single JSON object now.")
 
@@ -122,8 +132,10 @@ You are Widgeon's design engine. You convert a user's description into a JSON sp
             explicitNulls = false
         }
         val designJson = json.encodeToString(current.copy(prompt = "", id = "", createdAt = 0, updatedAt = 0, version = 0))
-        val user = "CURRENT WIDGET JSON:\n$designJson\n\nCHANGE REQUEST: ${instruction.trim()}\n\n" +
-            "Return the COMPLETE updated widget JSON (the whole object, with your changes applied). Same schema, same rules. Nothing but the JSON."
+        val user = "CURRENT WIDGET JSON:\n$designJson\n" +
+            (if (current.images.isNotEmpty()) "\nATTACHED PHOTOS: ${current.images.size} (image index 0..${current.images.size - 1} are available).\n" else "") +
+            "\nCHANGE REQUEST: ${instruction.trim()}\n\n" +
+            "Return the COMPLETE updated widget JSON (the whole object, with your changes applied). Same schema, same rules, obey the size guide. Nothing but the JSON."
         return listOf(AiMessage.system(systemPrompt())) + keepHistory + AiMessage.user(user)
     }
 

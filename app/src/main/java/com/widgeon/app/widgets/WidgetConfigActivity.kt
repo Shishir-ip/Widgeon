@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Recommend
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -47,10 +48,13 @@ import androidx.compose.ui.unit.dp
 import com.widgeon.app.data.WidgetDesign
 import com.widgeon.app.ui.theme.WidgeonTheme
 import com.widgeon.app.widgeon
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Opened by the launcher when a Widgeon widget is dropped on the home screen.
+ * Opened by the launcher when a Widgeon widget is dropped on the home screen
+ * (or right after "Add to Home" pinning succeeds — via auto_pick_unbound).
  * Lets the user pick which saved design this widget instance should show.
  */
 class WidgetConfigActivity : ComponentActivity() {
@@ -60,21 +64,43 @@ class WidgetConfigActivity : ComponentActivity() {
 
         // Cancel by default so backing out removes the widget (standard flow)
         setResult(RESULT_CANCELED)
-        val appWidgetId = intent?.extras?.getInt(
+
+        var appWidgetId = intent?.extras?.getInt(
             AppWidgetManager.EXTRA_APPWIDGET_ID,
             AppWidgetManager.INVALID_APPWIDGET_ID
         ) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+
+        val awm = AppWidgetManager.getInstance(this)
+
+        // Launched from a successful pin request (or a placeholder tap):
+        // find the freshly created widget that has no design bound yet.
+        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID &&
+            intent?.getBooleanExtra("auto_pick_unbound", false) == true
+        ) {
+            val unbound = WidgetHost.allComponentNames(this).flatMap { name ->
+                awm?.getAppWidgetIds(name)?.toList().orEmpty()
+            }.firstOrNull { id ->
+                awm.getAppWidgetInfo(id) != null && widgeon.prefs.boundDesignId(id) == null
+            }
+            if (unbound != null) appWidgetId = unbound
+        }
 
         if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
             finish()
             return
         }
 
+        // Match the provider class to a nominal slot size for "recommended" sorting
+        val slot = awm?.getAppWidgetInfo(appWidgetId)?.provider?.className
+            ?.let { WidgetHost.slotForClassName(it) }
+
         setContent {
             WidgeonTheme(themeMode = widgeon.prefs.themeMode) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     ConfigContent(
                         appWidgetId = appWidgetId,
+                        slotCols = slot?.cols,
+                        slotRows = slot?.rows,
                         onPick = { design -> bindAndFinish(appWidgetId, design) },
                         onOpenApp = {
                             startActivity(
@@ -102,16 +128,25 @@ class WidgetConfigActivity : ComponentActivity() {
 @Composable
 private fun ConfigContent(
     appWidgetId: Int,
+    slotCols: Int?,
+    slotRows: Int?,
     onPick: (WidgetDesign) -> Unit,
     onOpenApp: () -> Unit,
 ) {
     var designs by remember { mutableStateOf<List<WidgetDesign>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(Unit) {
-        designs = context.widgeon.designRepo.list()
+        val all = context.widgeon.designRepo.list()
+        // Designs whose size matches this widget slot come first
+        designs = if (slotCols != null && slotRows != null) {
+            all.sortedWith(
+                compareByDescending<WidgetDesign> {
+                    it.cols == slotCols && it.rows == slotRows
+                }.thenByDescending { it.updatedAt }
+            )
+        } else all
         loading = false
     }
 
@@ -123,7 +158,9 @@ private fun ConfigContent(
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            "This home-screen widget will display the design you pick. You can swap it any time.",
+            if (slotCols != null) "This widget is ${slotCols}×$slotRows — matching designs are marked as recommended." +
+                " Any design works; it adapts to the widget's real size."
+            else "This home-screen widget will display the design you pick. You can swap it any time.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp, bottom = 20.dp),
@@ -140,7 +177,11 @@ private fun ConfigContent(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(designs, key = { it.id }) { design ->
-                    DesignPickCard(design = design, onClick = { onPick(design) })
+                    DesignPickCard(
+                        design = design,
+                        recommended = slotCols != null && design.cols == slotCols && design.rows == slotRows,
+                        onClick = { onPick(design) },
+                    )
                 }
             }
         }
@@ -148,12 +189,12 @@ private fun ConfigContent(
 }
 
 @Composable
-private fun DesignPickCard(design: WidgetDesign, onClick: () -> Unit) {
+private fun DesignPickCard(design: WidgetDesign, recommended: Boolean, onClick: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var bitmap by remember(design.id, design.version) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var bitmap by remember(design.id, design.version, design.images.size) { mutableStateOf<android.graphics.Bitmap?>(null) }
 
-    LaunchedEffect(design.id, design.version) {
-        launch {
+    LaunchedEffect(design.id, design.version, design.images.size) {
+        withContext(Dispatchers.Default) {
             bitmap = WidgetHost.renderDesign(
                 context, design,
                 (design.cols * 70 - 30).coerceAtLeast(48),
@@ -203,11 +244,27 @@ private fun DesignPickCard(design: WidgetDesign, onClick: () -> Unit) {
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text(
-            design.sizeLabel,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (recommended) {
+                Icon(
+                    Icons.Rounded.Recommend,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.size(12.dp),
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    "Recommended · ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                design.sizeLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -239,5 +296,3 @@ private fun EmptyDesigns(onOpenApp: () -> Unit) {
         }
     }
 }
-
-/** Small local click modifier to avoid importing the shared components here. */

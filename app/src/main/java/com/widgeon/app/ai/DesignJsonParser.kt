@@ -112,9 +112,18 @@ object DesignJsonParser {
             background = bg,
             padding = d.padding.coerceIn(0, 32),
             elements = elements,
+            images = sanitizeImages(d.images),
             action = sanitizeAction(d.action),
         )
     }
+
+    private fun sanitizeImages(images: List<String>): List<String> =
+        images.asSequence()
+            .map { it.substringAfterLast('/').substringAfterLast('\\').trim() }
+            .filter { it.isNotEmpty() && Regex("^[A-Za-z0-9._-]+$").matches(it) }
+            .distinct()
+            .take(12)
+            .toList()
 
     private fun sanitizeBg(b: Background): Background {
         val type = if (b.type.equals("gradient", true)) "gradient" else "solid"
@@ -157,6 +166,9 @@ object DesignJsonParser {
                 )
                 ElementTypes.WEATHER -> out.add(
                     sanitizeLeaf(e, type).copy(style = if (e.style == "condition") "condition" else "temp")
+                )
+                ElementTypes.IMAGE -> out.add(
+                    sanitizeLeaf(e, type).copy(index = e.index.coerceIn(0, 9), rotate = e.rotate)
                 )
                 else -> out.add(sanitizeLeaf(e, type))
             }

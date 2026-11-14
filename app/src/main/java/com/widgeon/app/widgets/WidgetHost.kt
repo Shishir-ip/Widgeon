@@ -2,16 +2,21 @@ package com.widgeon.app.widgets
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProviderInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
 import android.widget.RemoteViews
 import com.widgeon.app.MainActivity
 import com.widgeon.app.R
+import com.widgeon.app.data.ImageStore
 import com.widgeon.app.data.WidgetAction
 import com.widgeon.app.data.WidgetDesign
 import com.widgeon.app.render.DesignRenderer
@@ -21,7 +26,12 @@ import kotlin.math.roundToInt
 
 /**
  * Shared logic for every Widgeon widget: renders the design bound to an
- * appWidgetId into a bitmap and pushes it into the widget's RemoteViews.
+ * appWidgetId and pushes it into the widget's RemoteViews.
+ *
+ * Live strategy (v1.1): clock/date elements become real TextClock overlays on
+ * Android 12+ — the launcher updates them every minute with zero alarms, even
+ * when the app process is dead. On older versions (and for battery/weather),
+ * the content is embedded in the bitmap and refreshed by WidgetUpdater.
  */
 object WidgetHost {
 
@@ -36,6 +46,8 @@ object WidgetHost {
         Slot(Widget4x4::class.java, 4, 4),
     )
 
+    private val LIVE_IDS = intArrayOf(R.id.live_0, R.id.live_1, R.id.live_2, R.id.live_3)
+
     fun allComponentNames(context: Context): List<ComponentName> =
         SLOTS.map { ComponentName(context, it.providerClass) }
 
@@ -44,6 +56,9 @@ object WidgetHost {
         val matches = SLOTS.sortedBy { abs(it.cols - cols) * 10 + abs(it.rows - rows) }
         return matches.first()
     }
+
+    fun slotForClassName(className: String?): Slot? =
+        SLOTS.firstOrNull { it.providerClass.name == className }
 
     private fun abs(i: Int) = if (i < 0) -i else i
 
@@ -62,7 +77,11 @@ object WidgetHost {
         val density = context.resources.displayMetrics.density.coerceIn(1f, 2.4f)
         val w = (widthDp * density).roundToInt().coerceIn(8, 1600)
         val h = (heightDp * density).roundToInt().coerceIn(8, 1600)
-        return DesignRenderer.render(design, w, h, density, LiveDataProvider.snapshot(context))
+        return DesignRenderer.render(
+            design, w, h, density,
+            LiveDataProvider.snapshot(context),
+            imageLoader = ImageStore.loader(context),
+        )
     }
 
     fun hasLiveElements(design: WidgetDesign): Boolean = design.elements.any { hasLive(it) }
@@ -77,45 +96,94 @@ object WidgetHost {
         val designId = context.widgeon.prefs.boundDesignId(appWidgetId)
         val design = designId?.let { runCatching { kotlinx.coroutines.runBlocking { context.widgeon.designRepo.get(it) } }.getOrNull() }
 
-        val views: RemoteViews
-        if (design != null) {
+        val views: RemoteViews = if (design != null) {
             val (wDp, hDp) = widgetSizeDp(context, appWidgetId)
-            val bmp = runCatching { renderDesign(context, design, wDp, hDp) }.getOrNull()
-            views = RemoteViews(context.packageName, R.layout.widget_root)
-            if (bmp != null) {
-                views.setViewVisibility(R.id.widget_placeholder, android.view.View.GONE)
-                views.setViewVisibility(R.id.widget_image, android.view.View.VISIBLE)
-                views.setImageViewBitmap(R.id.widget_image, bmp)
-            } else {
-                views.setViewVisibility(R.id.widget_placeholder, android.view.View.VISIBLE)
-                views.setViewVisibility(R.id.widget_image, android.view.View.GONE)
-            }
-            views.setOnClickPendingIntent(R.id.widget_root, tapIntent(context, appWidgetId, design))
+            buildDesignViews(context, design, wDp, hDp)
         } else {
-            views = RemoteViews(context.packageName, R.layout.widget_root)
-            views.setViewVisibility(R.id.widget_placeholder, android.view.View.VISIBLE)
-            views.setViewVisibility(R.id.widget_image, android.view.View.GONE)
-            views.setOnClickPendingIntent(R.id.widget_root, tapIntent(context, appWidgetId, null))
+            placeholderViews(context)
         }
         awm.updateAppWidget(appWidgetId, views)
     }
 
+    fun buildDesignViews(context: Context, design: WidgetDesign, wDp: Int, hDp: Int): RemoteViews {
+        val useOverlay = Build.VERSION.SDK_INT >= 31
+        val density = context.resources.displayMetrics.density.coerceIn(1f, 2.4f)
+        val w = (wDp * density).roundToInt().coerceIn(8, 1600)
+        val h = (hDp * density).roundToInt().coerceIn(8, 1600)
+
+        val result = DesignRenderer.renderDetailed(
+            design, w, h, density,
+            LiveDataProvider.snapshot(context),
+            includeLive = !useOverlay,
+            imageLoader = ImageStore.loader(context),
+        )
+
+        val views = RemoteViews(context.packageName, R.layout.widget_root)
+        views.setViewVisibility(R.id.widget_image, View.VISIBLE)
+        views.setImageViewBitmap(R.id.widget_image, result.bitmap)
+        views.setViewVisibility(R.id.widget_placeholder, View.GONE)
+        views.setOnClickPendingIntent(R.id.widget_root, tapIntent(context, design))
+
+        // Hide all overlay slots first
+        LIVE_IDS.forEach { views.setViewVisibility(it, View.GONE) }
+
+        if (useOverlay) {
+            result.overlays.forEachIndexed { i, spec ->
+                val id = LIVE_IDS[i]
+                try {
+                    views.setViewVisibility(id, View.VISIBLE)
+                    views.setCharSequence(id, "setFormat12Hour", spec.pattern)
+                    views.setCharSequence(id, "setFormat24Hour", spec.pattern)
+                    // TextView.setTextSize(float) is in sp — matches dp at default font scale
+                    views.setFloat(id, "setTextSize", spec.fontSizeDp)
+                    views.setInt(id, "setTextColor", spec.color)
+                    views.setBoolean(id, "setIncludeFontPadding", false)
+                    views.setInt(id, "setGravity", Gravity.CENTER_HORIZONTAL or Gravity.TOP)
+                    if (spec.style and Typeface.BOLD != 0) {
+                        views.setInt(id, "setPaintFlags", android.graphics.Paint.FAKE_BOLD_TEXT_FLAG)
+                    }
+                    views.setViewLayoutWidth(id, spec.widthDp, TypedValue.COMPLEX_UNIT_DIP)
+                    views.setViewLayoutMargin(id, RemoteViews.MARGIN_LEFT, spec.leftDp, TypedValue.COMPLEX_UNIT_DIP)
+                    views.setViewLayoutMargin(id, RemoteViews.MARGIN_TOP, spec.topDp, TypedValue.COMPLEX_UNIT_DIP)
+                } catch (t: Throwable) {
+                    // Overlay styling unsupported on this launcher: hide the slot
+                    views.setViewVisibility(id, View.GONE)
+                }
+            }
+        }
+        return views
+    }
+
+    private fun placeholderViews(context: Context): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.widget_root)
+        views.setViewVisibility(R.id.widget_image, View.GONE)
+        views.setViewVisibility(R.id.widget_placeholder, View.VISIBLE)
+        // Tapping an unbound widget opens the design chooser directly
+        val choose = Intent(context, WidgetConfigActivity::class.java)
+            .putExtra("auto_pick_unbound", true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        views.setOnClickPendingIntent(
+            R.id.widget_root,
+            PendingIntent.getActivity(context, 7003, choose, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        )
+        return views
+    }
+
     fun updateAll(context: Context) {
         val awm = AppWidgetManager.getInstance(context) ?: return
-        val names = allComponentNames(context)
-        names.forEach { name ->
+        allComponentNames(context).forEach { name ->
             awm.getAppWidgetIds(name).forEach { updateWidget(context, it) }
         }
         WidgetUpdater.refresh(context)
     }
 
-    private fun tapIntent(context: Context, appWidgetId: Int, design: WidgetDesign?): PendingIntent {
+    private fun tapIntent(context: Context, design: WidgetDesign?): PendingIntent {
         val action = design?.action ?: findButtonAction(design)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return when {
             action?.type == "openUrl" && !action.url.isNullOrBlank() ->
                 PendingIntent.getActivity(
-                    context, appWidgetId,
+                    context, appWidgetHash(design),
                     Intent(Intent.ACTION_VIEW, Uri.parse(action.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                     flags
                 )
@@ -123,17 +191,19 @@ object WidgetHost {
                 val launch = context.packageManager.getLaunchIntentForPackage(action.appPackage!!)
                     ?: Intent(context, MainActivity::class.java)
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                PendingIntent.getActivity(context, appWidgetId, launch, flags)
+                PendingIntent.getActivity(context, appWidgetHash(design), launch, flags)
             }
             else -> {
                 val intent = Intent(context, MainActivity::class.java).apply {
                     putExtra("open_design", design?.id)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
-                PendingIntent.getActivity(context, appWidgetId, intent, flags)
+                PendingIntent.getActivity(context, appWidgetHash(design), intent, flags)
             }
         }
     }
+
+    private fun appWidgetHash(design: WidgetDesign?): Int = design?.id?.hashCode() ?: 0
 
     private fun findButtonAction(design: WidgetDesign?): WidgetAction? {
         if (design == null) return null
@@ -149,16 +219,26 @@ object WidgetHost {
 
     // ------------------------------------------------------------------ pin
 
-    /** Requests the launcher to pin a widget of the design's size (API 26+). */
+    /**
+     * Requests the launcher to pin a widget of the design's size (API 26+).
+     * On success the launcher opens the design chooser pre-targeted at the
+     * freshly created widget, so it never stays a placeholder.
+     */
     fun requestPin(context: Context, design: WidgetDesign): Boolean {
         val awm = AppWidgetManager.getInstance(context) ?: return false
         if (!awm.isRequestPinAppWidgetSupported) return false
         val slot = slotFor(design.cols, design.rows)
         val extras = Bundle().apply {
-            // Hint the picker with the design's nominal size
             putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, (design.cols * 70 - 30))
             putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, (design.rows * 70 - 30))
         }
-        return awm.requestPinAppWidget(ComponentName(context, slot.providerClass), extras, null)
+        val chooseDesign = Intent(context, WidgetConfigActivity::class.java)
+            .putExtra("auto_pick_unbound", true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val success = PendingIntent.getActivity(
+            context, 7002, chooseDesign,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return awm.requestPinAppWidget(ComponentName(context, slot.providerClass), extras, success)
     }
 }

@@ -13,6 +13,7 @@ import com.widgeon.app.ui.AppViewModel
 import com.widgeon.app.ui.PendingNav
 import com.widgeon.app.ui.nav.AppRoot
 import com.widgeon.app.ui.theme.WidgeonTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -20,6 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleIntent(intent)
+        refreshWidgets()
         setContent {
             val appVm: AppViewModel = viewModel()
             val theme by appVm.themeMode.collectAsState()
@@ -36,5 +38,18 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent?.getStringExtra("open_design")?.let { PendingNav.designId = it }
+    }
+
+    /** Opening the app is a good moment to push fresh data into bound widgets. */
+    private fun refreshWidgets() {
+        val app = application as WidgeonApp
+        app.appScope.launch {
+            runCatching {
+                if (app.prefs.weatherCity.isNotBlank()) {
+                    com.widgeon.app.render.WeatherRepository.refresh(this@MainActivity)
+                }
+                com.widgeon.app.widgets.WidgetHost.updateAll(this@MainActivity)
+            }
+        }
     }
 }

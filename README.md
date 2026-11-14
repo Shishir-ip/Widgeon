@@ -17,11 +17,12 @@ Type something like *“a minimal clock with the date, dark glass style”* and 
 ### Features
 
 - 🪄 **Prompt → Widget** — one text box, one button. AI designs a complete widget spec (layout, text, colors, spacing) and Widgeon renders it pixel-perfect.
+- 🖼️ **Photo widgets** — ask for a picture frame or rotating gallery, then attach photos in the editor; image slots (with optional rotation) render right on your home screen.
 - 🧩 **Real home-screen widgets** — five sizes (1×1, 2×2, 4×2, 2×4, 4×4) appear in your launcher's widget picker. Resize freely; the widget re-renders at its actual size.
+- ⏰ **Always-on live clock** — clock/date elements use launcher-side TextClock overlays (Android 12+), so they tick every minute even when Widgeon isn't running; battery/weather refresh periodically.
 - ✏️ **Edit with AI** — every widget has an *edit with AI* chat: “make the clock bigger and add seconds”. Applied as a new version.
 - ↩️ **Undo / Redo** — every change is a version in the editor's history. Don't like the AI's idea? Undo it.
-- 📌 **Add to Home** — one-tap pin request for the widget's matching size (Android 8+), with a manual fallback guide.
-- ⏰ **Live data** — clock, date, battery percentage/bar and weather (via [Open-Meteo](https://open-meteo.com), no key needed) refresh automatically every minute.
+- 📌 **Add to Home** — one-tap pin request for the widget's matching size (Android 8+); right after pinning, the design chooser opens so the widget is never left blank.
 - 🎛️ **Advanced options** — grid size (presets or custom up to 5×5), style presets (Minimal, Dark Glass, Light Clean, Outline, Bold, Editorial), accent color, corner radius, live-data toggles and free-form notes for the AI.
 - 🔔 **Background generation** — a foreground service keeps a progress notification alive if you leave the app, and posts a completion notification when your widget is ready.
 - 🌗 **Themes** — light, dark or follow-system, in a monochrome professional palette.

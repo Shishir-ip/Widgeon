@@ -13,6 +13,29 @@
         android:visibility="gone"
         android:contentDescription="@string/widget_description" />
 
+    <!-- Live overlays: the launcher itself keeps these at the exact time —
+         no alarms needed, works even when the app process is dead. -->
+    <TextClock
+        android:id="@+id/live_0"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+    <TextClock
+        android:id="@+id/live_1"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+    <TextClock
+        android:id="@+id/live_2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+    <TextClock
+        android:id="@+id/live_3"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/widget_placeholder"
         android:layout_width="match_parent"

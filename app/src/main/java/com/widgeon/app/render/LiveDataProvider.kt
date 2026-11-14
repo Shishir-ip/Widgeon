@@ -17,6 +17,7 @@ object LiveDataProvider {
             battery = battery,
             weatherTemp = weather?.temp,
             weatherCode = weather?.code,
+            rotation = context.widgeon.prefs.rotationCounter,
         )
     }
 }

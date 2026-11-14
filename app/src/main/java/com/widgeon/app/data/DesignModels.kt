@@ -18,6 +18,8 @@ data class WidgetDesign(
     val background: Background = Background(),
     val padding: Int = 14,
     val elements: List<Element> = emptyList(),
+    /** Photo file names (stored app-private in widget_images/), referenced by image elements. */
+    val images: List<String> = emptyList(),
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
     val version: Int = 1,
@@ -25,6 +27,16 @@ data class WidgetDesign(
     val action: WidgetAction? = null,
 ) {
     val sizeLabel: String get() = "${cols}×$rows"
+
+    fun usesImages(): Boolean = images.isNotEmpty() || hasImageElement()
+
+    private fun hasImageElement(els: List<Element> = elements): Boolean =
+        els.any { it.type == ElementTypes.IMAGE || it.elements.any { e -> e.type == ElementTypes.IMAGE } }
+
+    fun hasRotatingImages(): Boolean = hasRotating(elements)
+
+    private fun hasRotating(els: List<Element>): Boolean =
+        els.any { (it.type == ElementTypes.IMAGE && it.rotate) || it.elements.any { e -> e.type == ElementTypes.IMAGE && e.rotate } }
 }
 
 @Serializable
@@ -83,6 +95,10 @@ data class Element(
     val padding: Int = 0,
     /** battery: percent | bar ; weather: temp | condition ; clock: digital */
     val style: String = "percent",
+    /** image: which photo slot (0-based) */
+    val index: Int = 0,
+    /** image: rotate through all photos on each refresh tick */
+    val rotate: Boolean = false,
     val action: WidgetAction? = null,
     val elements: List<Element> = emptyList(),
 )
@@ -95,6 +111,7 @@ object ElementTypes {
     const val BATTERY = "battery"
     const val WEATHER = "weather"
     const val ICON = "icon"
+    const val IMAGE = "image"
     const val DIVIDER = "divider"
     const val SPACER = "spacer"
     const val PROGRESS = "progress"
@@ -102,5 +119,8 @@ object ElementTypes {
     const val ROW = "row"
     const val COLUMN = "column"
 
-    val all = setOf(TEXT, CLOCK, DATE, BATTERY, WEATHER, ICON, DIVIDER, SPACER, PROGRESS, BUTTON, ROW, COLUMN)
+    val all = setOf(TEXT, CLOCK, DATE, BATTERY, WEATHER, ICON, IMAGE, DIVIDER, SPACER, PROGRESS, BUTTON, ROW, COLUMN)
+
+    /** Elements whose content the launcher can render live (no alarms needed). */
+    val systemLive = setOf(CLOCK, DATE)
 }

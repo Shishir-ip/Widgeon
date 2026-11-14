@@ -485,6 +485,14 @@ private fun FinishPage(appVm: AppViewModel, onRequestNotifications: () -> Unit) 
     val hapticsEnabled by appVm.hapticsEnabled.collectAsState()
     val themeMode by appVm.themeMode.collectAsState()
 
+    // Pop the system permission dialog automatically when this page appears
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            kotlinx.coroutines.delay(700)
+            if (!notifEnabled) onRequestNotifications()
+        }
+    }
+
     Column(
         Modifier
             .fillMaxSize()

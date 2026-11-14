@@ -91,6 +91,12 @@ class Prefs(context: Context) {
         get() = plain.getLong("weather_cache_at", 0L)
         set(v) = plain.edit().putLong("weather_cache_at", v).apply()
 
+    // ---------- Slideshow rotation ----------
+
+    var rotationCounter: Int
+        get() = plain.getInt("rotation_counter", 0)
+        set(v) = plain.edit().putInt("rotation_counter", v).apply()
+
     // ---------- Widget bindings (appWidgetId -> designId) ----------
 
     fun bindWidget(appWidgetId: Int, designId: String) =
