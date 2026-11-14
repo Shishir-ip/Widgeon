@@ -1,0 +1,21 @@
+# Build system
+.gradle/
+build/
+app/build/
+local.properties
+
+# Signing secrets — NEVER commit
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+Thumbs.db

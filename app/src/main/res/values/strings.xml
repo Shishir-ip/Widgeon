@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Widgeon</string>
+    <string name="widget_description">AI-generated home screen widgets made with Widgeon</string>
+
+    <string name="widget_label_1x1">Widgeon · 1×1</string>
+    <string name="widget_label_2x2">Widgeon · 2×2</string>
+    <string name="widget_label_4x2">Widgeon · 4×2</string>
+    <string name="widget_label_2x4">Widgeon · 2×4</string>
+    <string name="widget_label_4x4">Widgeon · 4×4</string>
+
+    <string name="widget_placeholder_title">Widgeon</string>
+    <string name="widget_placeholder_subtitle">Open the app to create a widget</string>
+
+    <string name="notif_channel_progress">Widget generation</string>
+    <string name="notif_channel_progress_desc">Shows live progress while Widgeon designs your widget</string>
+    <string name="notif_channel_result">Widget results</string>
+    <string name="notif_channel_result_desc">Notifies you when a widget finishes generating</string>
+</resources>
