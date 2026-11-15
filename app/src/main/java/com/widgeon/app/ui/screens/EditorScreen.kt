@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -148,6 +149,14 @@ class EditorViewModel(app: Application, val designId: String) : AndroidViewModel
     fun addImages(names: List<String>) {
         current?.let { d ->
             push(d.copy(images = (d.images + names).distinct().take(12)))
+            persist()
+        }
+    }
+
+    fun setSize(cols: Int, rows: Int) {
+        val d = current ?: return
+        if (d.cols != cols || d.rows != rows) {
+            push(d.copy(cols = cols, rows = rows))
             persist()
         }
     }
@@ -317,6 +326,26 @@ fun EditorScreen(
                 })
             }
 
+            // ------- Grid size (content re-adapts on the home screen)
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Size — content re-adapts when you resize the widget",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .horizontalScrollable(),
+            ) {
+                listOf(1 to 1, 2 to 2, 4 to 2, 2 to 4, 4 to 4).forEach { (c, r) ->
+                    WChip("${c}×$r", selected = design?.cols == c && design?.rows == r, onClick = { vm.setSize(c, r) })
+                }
+            }
+
             // ------- Photos (for image elements)
             if (hasImageSlots && design != null) {
                 Spacer(Modifier.height(18.dp))
@@ -455,6 +484,10 @@ private fun previewHeight(design: WidgetDesign?) = when {
 
 private fun hasImageElement(design: WidgetDesign): Boolean =
     design.elements.any { it.type == "image" || it.elements.any { e -> e.type == "image" } }
+
+@Composable
+private fun Modifier.horizontalScrollable(): Modifier =
+    this.horizontalScroll(rememberScrollState())
 
 @Composable
 private fun PhotoThumb(name: String, onRemove: () -> Unit) {

@@ -86,13 +86,20 @@ object DesignRenderer {
         val innerH = (h - pad * 2).roundToInt().coerceAtLeast(4)
         val root = Element(type = ElementTypes.COLUMN, gap = 6, elements = design.elements)
 
-        // Pass 1 — measure how much the tree overflows its box at scale 1.
-        val probe = Ctx(density, data, ink, 1f, includeLive, imageLoader, design.images)
+        // Adaptive scale: render target vs the size the design was composed for.
+        // A 2×2 design dropped into a 4×4 slot grows; shrinking back shrinks it.
+        val targetWDp = w / density
+        val targetHDp = h / density
+        val nominal = com.widgeon.app.ai.PromptBuilder.approxDp(design.cols, design.rows)
+        val adaptive = min(targetWDp / nominal.first, targetHDp / nominal.second).coerceIn(0.45f, 2.2f)
+
+        // Pass 1 — measure how much the tree overflows its box at the adaptive scale.
+        val probe = Ctx(density, data, ink, adaptive, 1f, includeLive, imageLoader, design.images)
         val rootFit = fitOf(root, innerW.toFloat(), innerH.toFloat(), probe, 0)
 
-        // Pass 2 — render at the scale that makes everything fit.
-        val scale = if (rootFit.factor > 1.02f) (1f / rootFit.factor).coerceIn(0.5f, 1f) else 1f
-        val ctx = Ctx(density, data, ink, scale, includeLive, imageLoader, design.images)
+        // Pass 2 — render with the overflow correction applied on top.
+        val fit = if (rootFit.factor > 1.02f) (1f / rootFit.factor).coerceIn(0.4f, 1f) else 1f
+        val ctx = Ctx(density, data, ink, adaptive, fit, includeLive, imageLoader, design.images)
 
         drawBackground(canvas, design.background, w.toFloat(), h.toFloat(), ctx)
         drawElement(canvas, root, pad, pad, innerW.toFloat(), innerH.toFloat(), ctx)
@@ -105,18 +112,22 @@ object DesignRenderer {
         val d: Float,
         val data: LiveSnapshot,
         val ink: Int,
-        val scale: Float,
+        /** Actual widget size vs the design's nominal size — scales ALL dp values. */
+        val adaptive: Float,
+        /** Overflow correction (≤ 1) from the fit pass. */
+        val fit: Float,
         val includeLive: Boolean,
         val imageLoader: ((String) -> Bitmap?)?,
         val images: List<String>,
     ) {
+        val total: Float = adaptive * fit
         val overlays = ArrayList<LiveOverlay>(4)
     }
 
-    private fun Float.dp(ctx: Ctx) = this * ctx.d
-    private fun Int.dp(ctx: Ctx) = this * ctx.d
-    private fun Float.ts(ctx: Ctx) = this * ctx.d * ctx.scale  // text-scaled dp
-    private fun Int.ts(ctx: Ctx) = this * ctx.d * ctx.scale
+    private fun Float.dp(ctx: Ctx) = this * ctx.d * ctx.adaptive
+    private fun Int.dp(ctx: Ctx) = this * ctx.d * ctx.adaptive
+    private fun Float.ts(ctx: Ctx) = this * ctx.d * ctx.total  // text-scaled dp
+    private fun Int.ts(ctx: Ctx) = this * ctx.d * ctx.total
 
     private fun Element.isLiveText() = type == ElementTypes.CLOCK || type == ElementTypes.DATE
 
@@ -181,7 +192,7 @@ object DesignRenderer {
         el.width != null -> el.width.dp(ctx)
         el.type == ElementTypes.SPACER || el.type == ElementTypes.DIVIDER -> 0f
         el.type == ElementTypes.ICON -> (el.height?.toFloat() ?: el.fontSize * 1.7f).ts(ctx)
-        el.type == ElementTypes.IMAGE -> ((el.height ?: el.width ?: 80)).dp(ctx) * ctx.scale
+        el.type == ElementTypes.IMAGE -> ((el.height ?: el.width ?: 80)).dp(ctx)
         el.type == ElementTypes.BUTTON ->
             textPaint(el, ctx).measureText(el.text ?: "Button") + 28f.dp(ctx)
         else -> textPaint(el, ctx).measureText(resolveText(el, ctx))
@@ -330,7 +341,7 @@ object DesignRenderer {
                     leftDp = x / ctx.d,
                     topDp = y / ctx.d,
                     widthDp = w / ctx.d,
-                    fontSizeDp = el.fontSize * ctx.scale,
+                    fontSizeDp = el.fontSize * ctx.total,
                     color = ColorUtil.parseOr(el.color, ctx.ink),
                     pattern = el.format ?: if (el.type == ElementTypes.CLOCK) "HH:mm" else "EEE, MMM d",
                     style = when {

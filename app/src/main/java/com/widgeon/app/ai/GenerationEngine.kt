@@ -78,6 +78,9 @@ class GenerationEngine(private val context: Context) {
             val now = System.currentTimeMillis()
             val design = DesignJsonParser.parse(raw, request.prompt).copy(
                 id = DesignRepository.newId(),
+                // The user's grid selection is authoritative — AI sizes vary
+                cols = request.cols.coerceIn(1, 5),
+                rows = request.rows.coerceIn(1, 5),
                 createdAt = now,
                 updatedAt = now,
                 version = 1,
@@ -99,6 +102,10 @@ class GenerationEngine(private val context: Context) {
             val parsed = DesignJsonParser.parse(raw, design.prompt)
             val updated = parsed.copy(
                 id = design.id,
+                // Keep the established grid size; follow-up prompts shouldn't
+                // silently move the widget to a different slot
+                cols = design.cols,
+                rows = design.rows,
                 prompt = design.prompt,
                 createdAt = design.createdAt,
                 updatedAt = System.currentTimeMillis(),
