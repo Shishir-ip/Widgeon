@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddToHomeScreen
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Refresh
@@ -43,6 +44,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -199,6 +201,15 @@ fun EditorScreen(
     var showPinHint by remember { mutableStateOf(false) }
     var instruction by remember { mutableStateOf("") }
     var previewBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var showSaved by remember { mutableStateOf(false) }
+
+    androidx.compose.runtime.LaunchedEffect(vm.savedTick) {
+        if (vm.savedTick > 0) {
+            showSaved = true
+            kotlinx.coroutines.delay(1600)
+            showSaved = false
+        }
+    }
 
     val design = vm.current
     val hasImageSlots = remember(design?.elements, design?.images) {
@@ -404,6 +415,7 @@ fun EditorScreen(
                 )
             }
             Spacer(Modifier.height(10.dp))
+            val engineRunning = engine.state.collectAsState().value is GenState.Running
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(
                     value = instruction,
@@ -425,24 +437,46 @@ fun EditorScreen(
                     Icons.Rounded.Send, "Send change",
                     onClick = {
                         val text = instruction.trim()
-                        if (text.isNotBlank()) {
+                        if (text.isNotBlank() && !engineRunning) {
                             vm.refine(text)
                             instruction = ""
                         }
                     },
                     container = MaterialTheme.colorScheme.primary,
                     tint = MaterialTheme.colorScheme.onPrimary,
-                    enabled = instruction.isNotBlank(),
+                    enabled = instruction.isNotBlank() && !engineRunning,
                     modifier = Modifier.size(52.dp),
+                )
+            }
+            if (engineRunning) {
+                Text(
+                    "The AI is working — you can queue another change when it finishes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                 )
             }
             Spacer(Modifier.height(22.dp))
 
-            PrimaryButton(
-                text = "Save changes",
-                onClick = { vm.persist() },
-                modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PrimaryButton(
+                    text = "Save changes",
+                    onClick = { vm.persist() },
+                    modifier = Modifier.weight(1f).widthIn(max = 420.dp),
+                )
+                androidx.compose.animation.AnimatedVisibility(visible = showSaved) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
+                        Icon(
+                            Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text("Saved", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground)
+                    }
+                }
+            }
             Spacer(Modifier.height(28.dp))
         }
     }

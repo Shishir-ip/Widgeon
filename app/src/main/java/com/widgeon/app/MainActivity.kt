@@ -1,14 +1,17 @@
 package com.widgeon.app
 
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.widgeon.app.data.Prefs
 import com.widgeon.app.ui.AppViewModel
 import com.widgeon.app.ui.PendingNav
 import com.widgeon.app.ui.nav.AppRoot
@@ -25,6 +28,22 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appVm: AppViewModel = viewModel()
             val theme by appVm.themeMode.collectAsState()
+            val systemDark =
+                (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            val dark = when (theme) {
+                Prefs.THEME_DARK -> true
+                Prefs.THEME_LIGHT -> false
+                else -> systemDark
+            }
+            // System bars follow the APP theme, not just the system setting
+            LaunchedEffect(dark) {
+                val style = if (dark) {
+                    androidx.activity.SystemBarStyle.dark(Color.TRANSPARENT)
+                } else {
+                    androidx.activity.SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                }
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
             WidgeonTheme(themeMode = theme) {
                 AppRoot(appVm)
             }

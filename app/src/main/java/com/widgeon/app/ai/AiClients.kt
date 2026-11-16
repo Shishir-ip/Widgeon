@@ -53,4 +53,31 @@ object AiClients {
     } catch (t: Throwable) {
         Result.failure(t)
     }
+
+    /** Tests values the user is still typing (onboarding), without saving them. */
+    suspend fun testDirect(providerId: String, apiKey: String, model: String, endpoint: String): Result<String> = try {
+        val p = when (providerId) {
+            Prefs.PROVIDER_GEMINI -> GeminiProvider(apiKey = apiKey, model = model)
+            Prefs.PROVIDER_GROQ -> OpenAiCompatProvider(
+                id = Prefs.PROVIDER_GROQ, displayName = "Groq",
+                baseUrl = "https://api.groq.com/openai/v1", apiKey = apiKey, model = model,
+            )
+            Prefs.PROVIDER_OPENROUTER -> OpenAiCompatProvider(
+                id = Prefs.PROVIDER_OPENROUTER, displayName = "OpenRouter",
+                baseUrl = "https://openrouter.ai/api/v1", apiKey = apiKey, model = model,
+                extraHeaders = mapOf(
+                    "HTTP-Referer" to "https://github.com/widgeon/app",
+                    "X-Title" to "Widgeon",
+                ),
+            )
+            else -> OpenAiCompatProvider(
+                id = Prefs.PROVIDER_CUSTOM, displayName = "Custom endpoint",
+                baseUrl = endpoint, apiKey = apiKey, model = model,
+            )
+        }
+        val reply = p.complete(listOf(AiMessage.user("Reply with exactly: OK")), temperature = 0.0)
+        Result.success(reply.take(40))
+    } catch (t: Throwable) {
+        Result.failure(t)
+    }
 }

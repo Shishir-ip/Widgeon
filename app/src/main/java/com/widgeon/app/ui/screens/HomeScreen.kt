@@ -54,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -138,6 +139,13 @@ fun HomeScreen(
 ) {
     val haptics = rememberHaptics()
     val recent by vm.recent.collectAsState()
+    val context = LocalContext.current
+
+    // Refresh the recent strip whenever a generation finishes (new widget added)
+    val engineState by context.widgeon.engine.state.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(engineState) {
+        if (engineState !is com.widgeon.app.ai.GenState.Running) vm.refreshRecent()
+    }
 
     LazyColumn(
         modifier = Modifier

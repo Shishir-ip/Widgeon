@@ -160,16 +160,18 @@ fun AppRoot(appVm: AppViewModel) {
                 onCancel = { haptics.tick(); engine.cancel() },
             )
             is GenState.Success -> {
-                val targetId = st.design.id
-                val alreadyThere = route == Routes.EDITOR && route?.let { r ->
-                    backStack?.arguments?.getString("designId") == targetId
-                } == true
-                if (!alreadyThere) {
+                // Capture values, then consume immediately so the state can't
+                // re-trigger the burst later (e.g. after leaving the editor).
+                val designId = st.design.id
+                val designName = st.design.name
+                val editorAlreadyOpen = route == Routes.EDITOR &&
+                    backStack?.arguments?.getString("designId") == designId
+                engine.consume()
+                if (!editorAlreadyOpen) {
                     SuccessBurst(
-                        name = st.design.name,
+                        name = designName,
                         onDone = {
-                            navController.navigate(Routes.editor(targetId)) { launchSingleTop = true }
-                            engine.consume()
+                            navController.navigate(Routes.editor(designId)) { launchSingleTop = true }
                         },
                     )
                 }

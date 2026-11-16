@@ -112,9 +112,9 @@ class GenerationEngine(private val context: Context) {
                 version = design.version + 1,
             )
             repo.upsert(updated)
-            _history.value = _history.value +
+            _history.value = (_history.value +
                 AiMessage.user("CHANGE REQUEST: ${instruction.trim()}") +
-                AiMessage.assistant(raw)
+                AiMessage.assistant(raw)).takeLast(16)
             updated
         }
     }

@@ -454,6 +454,42 @@ private fun ProviderPage(
                 },
             )
         }
+
+        // Inline connection test with the values currently on screen
+        val scope = rememberCoroutineScope()
+        var testing by remember { mutableStateOf(false) }
+        var testOk by remember { mutableStateOf(false) }
+        var testMsg by remember { mutableStateOf<String?>(null) }
+        androidx.compose.runtime.LaunchedEffect(providerId) { testMsg = null; testOk = false }
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) {
+            if (!testing) {
+                WChip("Test connection", selected = false, onClick = {
+                    testing = true
+                    testMsg = null
+                    scope.launch {
+                        val r = com.widgeon.app.ai.AiClients.testDirect(providerId, apiKey, model, customEndpoint)
+                        testOk = r.isSuccess
+                        testMsg = r.fold(
+                            onSuccess = { "Connected — provider replied “$it”" },
+                            onFailure = { e -> e.message ?: "Connection failed." },
+                        )
+                        testing = false
+                    }
+                })
+            } else {
+                Text("Testing…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            testMsg?.let { msg ->
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (testOk) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
         Spacer(Modifier.height(20.dp))
     }
 }
